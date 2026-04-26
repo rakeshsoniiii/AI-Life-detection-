@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Pro RC Controller</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.1/nipplejs.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; touch-action: none; }
+    body {
+      background-color: #121212;
+      color: white;
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .top-bar {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 10px;
+      background: #1e1e1e;
+      gap: 10px;
+      z-index: 10;
+    }
+    input {
+      padding: 8px;
+      border-radius: 5px;
+      border: 1px solid #444;
+      background: #2a2a2a;
+      color: #00e5ff;
+      font-weight: bold;
+      width: 150px;
+      text-align: center;
+    }
+    .status {
+      font-size: 14px;
+      color: #aaa;
+    }
+    .joystick-container {
+      display: flex;
+      flex: 1;
+      width: 100%;
+    }
+    .joystick-zone {
+      flex: 1;
+      position: relative;
+    }
+    .zone-label {
+      position: absolute;
+      top: 20px;
+      width: 100%;
+      text-align: center;
+      color: #555;
+      font-weight: bold;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="top-bar">
+    <label>ESP32 IP:</label>
+    <input type="text" id="ipInput" value="192.168.x.x" placeholder="Enter IP here">
+    <div class="status" id="status">Waiting...</div>
+  </div>
+
+  <div class="joystick-container">
+    <div id="zone_joystick_left" class="joystick-zone">
+      <div class="zone-label">THROTTLE (UP/DOWN)</div>
+    </div>
+    <div id="zone_joystick_right" class="joystick-zone">
+      <div class="zone-label">STEERING (LEFT/RIGHT)</div>
+    </div>
+  </div>
+
+  <script>
+    // Variables to hold analog values (-255 to +255)
+    let throttle = 0; 
+    let steering = 0;
+    let lastSent = "";
+
+    // Initialize Joysticks
+    const joystickLeft = nipplejs.create({
+      zone: document.getElementById('zone_joystick_left'),
+      mode: 'static',
+      position: { left: '50%', top: '50%' },
+      color: '#00e5ff',
+      lockY: true // Throttle only goes up and down
+    });
+
+    const joystickRight = nipplejs.create({
+      zone: document.getElementById('zone_joystick_right'),
+      mode: 'static',
+      position: { left: '50%', top: '50%' },
+      color: '#00e5ff',
+      lockX: true // Steering only goes left and right
+    });
+
+    // Left Joystick Events (Throttle)
+    joystickLeft.on('move', (evt, data) => {
+      // Map distance (0-50) and angle to a -255 to 255 range
+      let distance = data.distance; 
+      let direction = (data.angle.degree > 0 && data.angle.degree < 180) ? 1 : -1;
+      throttle = Math.round((distance / 50) * 255 * direction);
+    });
+    joystickLeft.on('end', () => { throttle = 0; });
+
+    // Right Joystick Events (Steering)
+    joystickRight.on('move', (evt, data) => {
+      let distance = data.distance;
+      // Angle ~0 is right, ~180 is left
+      let direction = (data.angle.degree < 90 || data.angle.degree > 270) ? 1 : -1;
+      steering = Math.round((distance / 50) * 255 * direction);
+    });
+    joystickRight.on('end', () => { steering = 0; });
+
+    // Main control loop (runs 10 times a second)
+    setInterval(() => {
+      // Tank Drive Mixing Math
+      let leftMotor = throttle + steering;
+      let rightMotor = throttle - steering;
+
+      // Constrain math to -255 to 255
+      leftMotor = Math.max(-255, Math.min(255, leftMotor));
+      rightMotor = Math.max(-255, Math.min(255, rightMotor));
+
+      let commandStr = `L=${leftMotor}&R=${rightMotor}`;
+      
+      // Only send if values changed to prevent network flooding
+      if (commandStr !== lastSent) {
+        lastSent = commandStr;
+        document.getElementById('status').innerText = `L: ${leftMotor} | R: ${rightMotor}`;
+        sendToESP32(leftMotor, rightMotor);
+      }
+    }, 100);
+
+    // Send HTTP Request to ESP32
+    function sendToESP32(l, r) {
+      let ip = document.getElementById('ipInput').value;
+      if (!ip || ip.includes("x")) return; // Don't send if IP isn't set
+
+      fetch(`http://${ip}/drive?L=${l}&R=${r}`)
+        .catch(err => console.log("Network error", err));
+    }
+  </script>
+</body>
+</html>
